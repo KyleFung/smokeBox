@@ -21,6 +21,7 @@
   <PropertyGroup Label="Globals">
     <ProjectGuid>{961B688B-C741-4EAA-A4AA-C6048F426D72}</ProjectGuid>
     <RootNamespace>sandbox</RootNamespace>
+    <ProjectName>smokeBox</ProjectName>
   </PropertyGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.Default.props" />
   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Debug|Win32'" Label="Configuration">
