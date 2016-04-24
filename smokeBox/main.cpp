@@ -7,7 +7,7 @@
 #include <cuda_gl_interop.h>
 
 void initGlut(int argc, char *argv[]);
-void launchGenerateCheckerboard(dim3 grid, dim3 block, float3 *pos, float3 *norm);
+void launchGenerateCheckerboard(dim3 grid, dim3 block, float3 *pos, float3 *norm, int granularity);
 
 // Callbacks
 void display();
@@ -36,10 +36,8 @@ float translateY = 0;
 float translateZ = -5;
 
 // Constraints of simulation
-int width = 8;
-int height = 8;
-int length = 8;
-int maxVert = width * height * length * 36;
+int length = 20;
+int maxVert = length * length * length * 36;
 
 int main(int argc, char *argv[]) {
     // Initialize GL and glut
@@ -79,9 +77,10 @@ int main(int argc, char *argv[]) {
     glutMouseFunc(mouse);
 
     // Compute checkerboard pattern into pos and normal arrays
-    dim3 grid(1, 1, 1);
-    dim3 block(width, height, length);
-    launchGenerateCheckerboard(grid, block, dVoxels, dNormals);
+    int gridLen = (length + 8 - 1) / 8;
+    dim3 grid(gridLen, gridLen, gridLen);
+    dim3 block(8, 8, 8);
+    launchGenerateCheckerboard(grid, block, dVoxels, dNormals, length);
     cudaGraphicsUnmapResources(1, &cNormals, 0);
     cudaGraphicsUnmapResources(1, &cVoxels, 0);
 
