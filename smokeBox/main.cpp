@@ -7,7 +7,10 @@
 #include <cuda_gl_interop.h>
 
 void initGlut(int argc, char *argv[]);
-void launchGenerateCheckerboard(dim3 grid, dim3 block, float3 *pos, float3 *norm, int granularity);
+void launchVoxelOccupancy(dim3 grid, dim3 block, int* occupancy, int granularity);
+void launchOccupancyScan(int numVoxels, int* scanned, int* occupancy);
+void launchCompactVoxels(dim3 grid, dim3 block, int* dCompact, int* dOccupancy, int* dScanned, int granularity);
+void launchGenerateVoxels(dim3 grid, dim3 block, int* dCompact, float3* dVoxels, float3* dNormals, int granularity, int maxVert);
 
 // Callbacks
 void display();
@@ -22,8 +25,11 @@ GLuint normals;
 // CUDA resources
 cudaGraphicsResource *cVoxels;
 cudaGraphicsResource *cNormals;
-float3 *dVoxels;
-float3 *dNormals;
+float3* dVoxels;
+float3* dNormals;
+int* dOccupancy;
+int* dScanned;
+int* dCompact;
 
 // Variables to keep track of camera
 int mouseClick = 0;
@@ -36,8 +42,9 @@ float translateY = 0;
 float translateZ = -5;
 
 // Constraints of simulation
-int length = 20;
+int length = 100;
 int maxVert = length * length * length * 36;
+int numVoxels = 0;
 
 int main(int argc, char *argv[]) {
     // Initialize GL and glut
@@ -64,6 +71,9 @@ int main(int argc, char *argv[]) {
     // Map GPU memory and CUDA resources
     cudaMalloc((void **)&(dVoxels), sizeof(float) * maxVert * 3);
     cudaMalloc((void **)&(dNormals), sizeof(float) * maxVert * 3);
+    cudaMalloc((void **)&(dOccupancy), sizeof(int) * length * length * length);
+    cudaMalloc((void **)&(dScanned), sizeof(int) * length * length * length);
+    cudaMalloc((void **)&(dCompact), sizeof(int) * length * length * length);
     size_t numBytes;
     cudaGraphicsMapResources(1, &cVoxels, 0);
     cudaGraphicsResourceGetMappedPointer((void **)&dVoxels, &numBytes, cVoxels);
@@ -77,14 +87,42 @@ int main(int argc, char *argv[]) {
     glutMouseFunc(mouse);
 
     // Compute checkerboard pattern into pos and normal arrays
+    int maxVoxels = length * length * length;
     int gridLen = (length + 8 - 1) / 8;
     dim3 grid(gridLen, gridLen, gridLen);
     dim3 block(8, 8, 8);
-    launchGenerateCheckerboard(grid, block, dVoxels, dNormals, length);
+
+    // Generate the voxel occupancy array
+    launchVoxelOccupancy(grid, block, dOccupancy, length);
+    // Scan the occupancy array
+    launchOccupancyScan(length * length * length, dScanned, dOccupancy);
+    // Compact the scanned array
+    launchCompactVoxels(grid, block, dCompact, dOccupancy, dScanned, length);
+
+    // Count number of active voxels
+    int lastOccupancy;
+    int lastScanned;
+    cudaMemcpy((void*)&lastOccupancy, (void*)(dOccupancy + maxVoxels - 1), sizeof(int), cudaMemcpyDeviceToHost);
+    cudaMemcpy((void*)&lastScanned, (void*)(dScanned + maxVoxels - 1), sizeof(int), cudaMemcpyDeviceToHost);
+    numVoxels = lastOccupancy + lastScanned;
+
+    // Generate voxel polygons out of compacted array
+    launchGenerateVoxels(grid, block, dCompact, dVoxels, dNormals, length, numVoxels);
+
+    // Free up voxel generation memory
+    cudaFree((void *)dOccupancy);
+    cudaFree((void *)dScanned);
+    cudaFree((void *)dCompact);
+
     cudaGraphicsUnmapResources(1, &cNormals, 0);
     cudaGraphicsUnmapResources(1, &cVoxels, 0);
 
     glutMainLoop();
+
+    // Free up CUDA graphics resources
+    cudaFree((void *)dVoxels);
+    cudaFree((void *)dNormals);
+
     return 0;
 }
 
@@ -144,7 +182,7 @@ void display() {
 
     // Render
     glEnable(GL_LIGHTING);
-    glDrawArrays(GL_TRIANGLES, 0, maxVert * 3);
+    glDrawArrays(GL_TRIANGLES, 0, numVoxels * 36);
     glDisableClientState(GL_VERTEX_ARRAY);
     glDisableClientState(GL_NORMAL_ARRAY);
     glBindBuffer(GL_ARRAY_BUFFER, 0);

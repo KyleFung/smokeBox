@@ -1,12 +1,12 @@
 
-#include "cuda_runtime.h"
-#include "device_launch_parameters.h"
+#include <cuda_runtime.h>
+#include <device_launch_parameters.h>
+#include <thrust/scan.h>
+#include <thrust/device_vector.h>
 
 #include <stdio.h>
 
-cudaError_t addWithCuda(int *c, const int *a, const int *b, unsigned int size);
-
-__global__ void generateCheckerboard(float3 *pos, float3 *norm, int granularity) {
+__global__ void voxelOccupancy(int* occupancy, int granularity) {
     int x = blockIdx.x * blockDim.x + threadIdx.x;
     int y = blockIdx.y * blockDim.y + threadIdx.y;
     int z = blockIdx.z * blockDim.z + threadIdx.z;
@@ -17,18 +17,56 @@ __global__ void generateCheckerboard(float3 *pos, float3 *norm, int granularity)
     }
 
     // Determine if this thread's block is solid
+    int base = z * granularity * granularity + y * granularity + x;
     int solid = 1 - (threadIdx.y % 2);
     if (threadIdx.x % 2 == threadIdx.z % 2) {
         solid = threadIdx.y % 2;
     }
+    occupancy[base] = solid;
+}
 
-    float length = (float) solid / granularity;
+__global__ void compactVoxels(int* compact, int* occupancy, int* scanned, int granularity) {
+    int x = blockIdx.x * blockDim.x + threadIdx.x;
+    int y = blockIdx.y * blockDim.y + threadIdx.y;
+    int z = blockIdx.z * blockDim.z + threadIdx.z;
+
+    // Detect out of bounds
+    if (x >= granularity || y >= granularity || z >= granularity) {
+        return;
+    }
+
+    // Resolve elements of the compacted array
+    int base = z * granularity * granularity + y * granularity + x;
+    if (occupancy[base] == 1) {
+        compact[scanned[base]] = base;
+    }
+}
+
+__global__ void generateVoxels(int* dCompact, float3* pos, float3* norm, int granularity, int maxVert) {
+    int x = blockIdx.x * blockDim.x + threadIdx.x;
+    int y = blockIdx.y * blockDim.y + threadIdx.y;
+    int z = blockIdx.z * blockDim.z + threadIdx.z;
+    int i = z * granularity * granularity + y * granularity + x;
+
+    // Detect out of bounds
+    if (x >= granularity || y >= granularity || z >= granularity || i > maxVert) {
+        return;
+    }
+
+    // Compute relative spatial locations of this voxel
+    int spatialIndex = dCompact[i];
+    int relz = spatialIndex / (granularity * granularity);
+    int rely = (spatialIndex - relz * (granularity * granularity)) / granularity;
+    int relx = spatialIndex - relz * (granularity * granularity) - rely * granularity;
+
+    float length = 1.0f / granularity;
     float half = 0.5f * granularity;
-    float3 rel = { (x - (half - 0.5f)) * 2.0f * length,
-                   (y - (half - 0.5f)) * 2.0f * length,
-                   (z - (half - 0.5f)) * 2.0f * length, };
+    float3 rel = { (relx - (half - 0.5f)) * 2.0f * length,
+                   (rely - (half - 0.5f)) * 2.0f * length,
+                   (relz - (half - 0.5f)) * 2.0f * length, };
 
-    int base = 36 * (z * granularity * granularity + y * granularity + x);
+    // Hardcoded cube data (should be replaced using instancing)
+    int base = 36 * i;
     pos[base] = { -length, -length, -length };
     pos[base + 1] = { -length, -length, length };
     pos[base + 2] = { -length, length, length };
@@ -65,11 +103,6 @@ __global__ void generateCheckerboard(float3 *pos, float3 *norm, int granularity)
     pos[base + 33] = { length, length, length };
     pos[base + 34] = { -length, length, length };
     pos[base + 35] = { length, -length, length };
-    for (int j = 0; j < 36; j++) {
-        pos[base + j].x += rel.x;
-        pos[base + j].y += rel.y;
-        pos[base + j].z += rel.z;
-    }
     norm[base] = { -1, 0, 0 };
     norm[base + 1] = { -1, 0, 0 };
     norm[base + 2] = { -1, 0, 0 };
@@ -106,8 +139,27 @@ __global__ void generateCheckerboard(float3 *pos, float3 *norm, int granularity)
     norm[base + 33] = { 0, 0, 1 };
     norm[base + 34] = { 0, 0, 1 };
     norm[base + 35] = { 0, 0, 1 };
+    for (int j = 0; j < 36; j++) {
+        pos[base + j].x += rel.x;
+        pos[base + j].y += rel.y;
+        pos[base + j].z += rel.z;
+    }
 }
 
-void launchGenerateCheckerboard(dim3 grid, dim3 block, float3 *pos, float3 *norm, int granularity) {
-    generateCheckerboard <<<grid, block>>>(pos, norm, granularity);
+void launchVoxelOccupancy(dim3 grid, dim3 block, int *occupancy, int granularity) {
+    voxelOccupancy<<<grid, block>>>(occupancy, granularity);
+}
+
+void launchOccupancyScan(int numVoxels, int* scanned, int* occupancy) {
+    thrust::exclusive_scan(thrust::device_ptr<int>(occupancy),
+                           thrust::device_ptr<int>(occupancy + numVoxels),
+                           thrust::device_ptr<int>(scanned));
+}
+
+void launchCompactVoxels(dim3 grid, dim3 block, int* dCompact, int* dOccupancy, int* dScanned, int granularity) {
+    compactVoxels<<<grid, block>>>(dCompact, dOccupancy, dScanned, granularity);
+}
+
+void launchGenerateVoxels(dim3 grid, dim3 block, int* dCompact, float3* dVoxels, float3* dNormals, int granularity, int maxVert) {
+    generateVoxels<<<grid, block>>>(dCompact, dVoxels, dNormals, granularity, maxVert);
 }

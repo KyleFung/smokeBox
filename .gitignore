@@ -1,3 +1,6 @@
 /x64/*
 /smokeBox/x64/*
 smokeBox.opensdf
+*.pdb
+*.sdf
+*.suo
