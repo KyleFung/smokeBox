@@ -21,6 +21,7 @@ void motion(int x, int y);
 // GL resources
 GLuint voxels;
 GLuint normals;
+GLuint axes;
 
 // CUDA resources
 cudaGraphicsResource *cVoxels;
@@ -79,6 +80,18 @@ int main(int argc, char *argv[]) {
     cudaGraphicsResourceGetMappedPointer((void **)&dVoxels, &numBytes, cVoxels);
     cudaGraphicsMapResources(1, &cNormals, 0);
     cudaGraphicsResourceGetMappedPointer((void **)&dNormals, &numBytes, cNormals);
+
+    // Initialize vertex array for basis axes
+    float axesDirections[18] = { -1.1f, -1.1f, -1.1f,
+                                0.0f, -1.1f, -1.1f,
+                                -1.1f, -1.1f, -1.1f,
+                                -1.1f, 0.0f, -1.1f,
+                                -1.1f, -1.1f, -1.1f,
+                                -1.1f, -1.1f, 0.0f };
+    glGenBuffers(1, &axes);
+    glBindBuffer(GL_ARRAY_BUFFER, axes);
+    glBufferData(GL_ARRAY_BUFFER, sizeof(float) * 18, axesDirections, GL_DYNAMIC_DRAW);
+    glBindBuffer(GL_ARRAY_BUFFER, 0);
 
     // Callbacks
     glutDisplayFunc(display);
@@ -186,6 +199,13 @@ void display() {
     glDisableClientState(GL_VERTEX_ARRAY);
     glDisableClientState(GL_NORMAL_ARRAY);
     glBindBuffer(GL_ARRAY_BUFFER, 0);
+    glDisable(GL_LIGHTING);
+
+    glBindBuffer(GL_ARRAY_BUFFER, axes);
+    glVertexPointer(3, GL_FLOAT, 0, 0);
+    glEnableClientState(GL_VERTEX_ARRAY);
+    glDrawArrays(GL_LINES, 0, 6);
+    glDisableClientState(GL_VERTEX_ARRAY);
 
     glPopMatrix();
 
